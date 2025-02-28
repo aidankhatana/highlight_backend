@@ -1,21 +1,22 @@
 {
-  "name": "highlight_backend",
+  "name": "highlight-backend",
   "version": "1.0.0",
-  "main": "server.js",
+  "type": "module",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "build": "echo 'No build step required for backend'",
-    "migrate": "npx prisma migrate dev"
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev"
   },
   "dependencies": {
+    "@prisma/client": "^5.10.0",
+    "bcrypt": "^5.1.1",
+    "cors": "^2.8.5",
     "express": "^4.18.2",
-    "@prisma/client": "^6.3.0",
-    "prisma": "^6.3.0",
-    "pg": "^8.11.0"
+    "jsonwebtoken": "^9.0.2"
   },
-
   "devDependencies": {
-    "nodemon": "^3.0.0"
+    "nodemon": "^3.0.3",
+    "prisma": "^5.10.0"
   }
 }

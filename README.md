@@ -1,4 +1,4 @@
-# highlight_backend
+# highlight
 
 start postgres
 brew services start postgresql

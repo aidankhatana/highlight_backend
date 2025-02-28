@@ -2,91 +2,219 @@
 // This is just a skeleton, returning mock data or minimal logic.
 // Later, we'll integrate a PostgreSQL database, an ORM, and real business logic.
 
-const express = require('express');
-const app = express();
+import express from 'express'
+import cors from 'cors'
+import bcrypt from 'bcrypt'
+import jwt from 'jsonwebtoken'
+import prisma from './prismaClient.js'
 
-app.use(express.json());
+const app = express()
+const PORT = process.env.PORT || 3000
 
-// Placeholder data:
-let mockUsers = [
-  { id: 1, email: 'test@example.com', password: 'hashedpassword', streak: 2 },
-];
+app.use(cors())
+app.use(express.json())
 
-let mockHighlights = [
-  {
-    id: 1,
-    userId: 1,
-    content: 'Hello, this is my first highlight!',
-    createdAt: new Date().toISOString(),
-    visibleFrom: null, // not visible yet
-    visibleTo: null,
-  },
-];
+// Authentication middleware
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization']
+  const token = authHeader && authHeader.split(' ')[1]
 
-// Basic route to check server status
-app.get('/', (req, res) => {
-  res.json({ message: 'API is running!' });
-});
-
-// Auth endpoints
-// [POST] /register
-app.post('/register', (req, res) => {
-  // TODO: input validation, hashing password, storing in DB
-  const { email, password } = req.body;
-
-  // For now, just push to mock array
-  const newUser = {
-    id: mockUsers.length + 1,
-    email,
-    password, // obviously not storing plain text in production
-    streak: 0,
-  };
-  mockUsers.push(newUser);
-  // Return the user (omitting password ideally)
-  res.json({ id: newUser.id, email: newUser.email, streak: newUser.streak });
-});
-
-// [POST] /login
-app.post('/login', (req, res) => {
-  // TODO: real authentication, password hashing comparison, JWT tokens
-  const { email, password } = req.body;
-  const user = mockUsers.find((u) => u.email === email && u.password === password);
-
-  if (!user) {
-    return res.status(401).json({ error: 'Invalid credentials' });
+  if (!token) {
+    return res.status(401).json({ error: 'Authentication required' })
   }
 
-  // Return a mock token or user object in real scenario
-  res.json({ message: 'Login successful', userId: user.id });
-});
+  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+    if (err) return res.status(403).json({ error: 'Invalid token' })
+    req.user = user
+    next()
+  })
+}
 
-// Highlights endpoints
-// [GET] /highlights
-app.get('/highlights', (req, res) => {
-  // For now, return all mock highlights
-  res.json({ highlights: mockHighlights });
-});
+// Auth routes
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const { email, username, password } = req.body
 
-// [POST] /highlights
-app.post('/highlights', (req, res) => {
-  // TODO: authenticate user, read content, store in DB
-  const { userId, content } = req.body;
-  const newHighlight = {
-    id: mockHighlights.length + 1,
-    userId,
-    content,
-    createdAt: new Date().toISOString(),
-    visibleFrom: null,
-    visibleTo: null,
-  };
+    // Validate input
+    if (!email || !username || !password) {
+      return res.status(400).json({ error: 'All fields are required' })
+    }
 
-  mockHighlights.push(newHighlight);
+    // Check if user exists
+    const existingUser = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { email },
+          { username }
+        ]
+      }
+    })
 
-  res.json(newHighlight);
-});
+    if (existingUser) {
+      return res.status(409).json({ error: 'User already exists' })
+    }
 
-// Start server
-const PORT = process.env.PORT || 3000;
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10)
+
+    // Create user
+    const user = await prisma.user.create({
+      data: {
+        email,
+        username,
+        password: hashedPassword
+      },
+      select: {
+        id: true,
+        email: true,
+        username: true
+      }
+    })
+
+    // Generate token
+    const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET)
+
+    res.json({ user, token })
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body
+
+    const user = await prisma.user.findUnique({
+      where: { email }
+    })
+
+    if (!user || !await bcrypt.compare(password, user.password)) {
+      return res.status(401).json({ error: 'Invalid credentials' })
+    }
+
+    const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET)
+
+    res.json({
+      user: {
+        id: user.id,
+        email: user.email,
+        username: user.username
+      },
+      token
+    })
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// Highlight routes
+app.get('/api/highlights', authenticateToken, async (req, res) => {
+  try {
+    const highlights = await prisma.highlight.findMany({
+      where: {
+        userId: req.user.userId
+      },
+      include: {
+        tags: true
+      }
+    })
+    res.json(highlights)
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+app.post('/api/highlights', authenticateToken, async (req, res) => {
+  try {
+    const { content, source, color, tags } = req.body
+
+    const highlight = await prisma.highlight.create({
+      data: {
+        content,
+        source,
+        color,
+        userId: req.user.userId,
+        tags: {
+          connectOrCreate: tags?.map(tag => ({
+            where: { name: tag },
+            create: { name: tag }
+          })) || []
+        }
+      },
+      include: {
+        tags: true
+      }
+    })
+
+    res.json(highlight)
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+app.put('/api/highlights/:id', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params
+    const { content, source, color, tags } = req.body
+
+    const highlight = await prisma.highlight.update({
+      where: {
+        id,
+        userId: req.user.userId
+      },
+      data: {
+        content,
+        source,
+        color,
+        tags: {
+          set: [],
+          connectOrCreate: tags?.map(tag => ({
+            where: { name: tag },
+            create: { name: tag }
+          })) || []
+        }
+      },
+      include: {
+        tags: true
+      }
+    })
+
+    res.json(highlight)
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+app.delete('/api/highlights/:id', authenticateToken, async (req, res) => {
+  try {
+    await prisma.highlight.delete({
+      where: {
+        id: req.params.id,
+        userId: req.user.userId
+      }
+    })
+    res.json({ message: 'Highlight deleted' })
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// Tag routes
+app.get('/api/tags', authenticateToken, async (req, res) => {
+  try {
+    const tags = await prisma.tag.findMany({
+      include: {
+        _count: {
+          select: { highlights: true }
+        }
+      }
+    })
+    res.json(tags)
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+  console.log(`Server running on port ${PORT}`)
+})
